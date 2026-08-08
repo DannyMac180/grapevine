@@ -65,6 +65,10 @@ Either way, verify with `/plugin` (Grapevine listed, no errors) or by editing an
 
 Grapevine must be installed in **every session you want observed** — an unobserved session is invisible to the graph.
 
+## Go deeper
+
+I write [**Attention Heads**](https://attentionheads.substack.com/?utm_source=github&utm_medium=readme&utm_campaign=grapevine) — deep, evidence-backed writing on AI, cognition, and agentic engineering. The **Agentic Engineering Field Notes** series is where I publish practical advice on the craft of using AI. [Subscribe](https://attentionheads.substack.com/subscribe?utm_source=github&utm_medium=readme&utm_campaign=grapevine) to get new posts to your inbox.
+
 ## How it works
 
 1. Your session's `PostToolUse` hook fires after an Edit/Write. It records the touched file in the session's activity record (`~/.grapevine/<project-id>/sessions/`) and rebuilds `graph.json`.
@@ -113,10 +117,6 @@ Set them in your shell or a settings `env` map before starting the session.
 
 - Loaded via `--plugin-dir`: just drop the flag next launch. Skills-directory install: remove `~/.claude/skills/grapevine/`. Marketplace install: `/plugin` → Grapevine → uninstall.
 - Wipe all observed state: `rm -rf ~/.grapevine` — it holds only Grapevine's own records (session activity, graph, notes, log) and is safely regenerated from scratch.
-
-## Go deeper
-
-I write [**Attention Heads**](https://attentionheads.substack.com/?utm_source=github&utm_medium=readme&utm_campaign=grapevine) — deep, evidence-backed writing on AI, cognition, and agentic engineering. The **Agentic Engineering Field Notes** series is where I publish practical advice on the craft of using AI. [Subscribe](https://attentionheads.substack.com/subscribe?utm_source=github&utm_medium=readme&utm_campaign=grapevine) to get new posts to your inbox.
 
 ## Development
 
