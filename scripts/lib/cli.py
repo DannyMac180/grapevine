@@ -6,6 +6,7 @@ Bash commands per the cross-session-messaging docs), falling back to cwd match.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -49,7 +50,8 @@ def cmd_status(store: "state.Store") -> None:
         hint = p.get("task_hint") or "no task hint"
         print(f"  • {_display(p)}  branch={p.get('branch') or '-'}  "
               f"files={len(p.get('files_touched', {}))}  — {hint}")
-    notes = notify.last_notes(store, 5)
+    notes = notify.last_notes(store, 5,
+                              session_id=me["session_id"] if me else None)
     print(f"\nLast {len(notes)} note(s) sent:")
     for n in notes:
         print(f"  [{n.get('ts')}] {n.get('file')}: {n.get('note')}")
@@ -73,19 +75,22 @@ def cmd_graph(store: "state.Store") -> None:
         for src, targets in sorted(imports.items()):
             for t in targets:
                 print(f"  {src} → {t}")
+    def fid(f: str) -> str:
+        return "F" + hashlib.md5(f.encode()).hexdigest()[:12]
+
+    def q(label: str) -> str:
+        return label.replace('"', "'").replace("\n", " ")
+
     print("\n```mermaid\nflowchart LR")
     for i, (sid, s) in enumerate(sessions.items()):
-        label = s.get("name") or sid[:8]
-        print(f'    S{i}["{label}<br/>{s.get("branch") or "-"}"]')
+        label = q(s.get("name") or sid[:8])
+        print(f'    S{i}["{label}<br/>{q(s.get("branch") or "-")}"]')
         for f in s.get("files", []):
-            fid = "F" + str(abs(hash(f)) % 10**8)
-            print(f'    {fid}(["{f}"])')
-            print(f"    S{i} -- touched --> {fid}")
+            print(f'    {fid(f)}(["{q(f)}"])')
+            print(f"    S{i} -- touched --> {fid(f)}")
     for src, targets in sorted(imports.items()):
         for t in targets:
-            a = "F" + str(abs(hash(src)) % 10**8)
-            b = "F" + str(abs(hash(t)) % 10**8)
-            print(f"    {a} -- imports --> {b}")
+            print(f"    {fid(src)} -- imports --> {fid(t)}")
     print("```")
 
 

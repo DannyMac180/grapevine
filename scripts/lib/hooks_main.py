@@ -83,12 +83,16 @@ def do_post_tool(payload: dict, started: float) -> None:
     g = gv_graph.build_graph(store, deadline=deadline - GRAPH_HEADROOM_S)
     rel = state.rel_path(file_path, store.cwd)
     impacts = gv_graph.who_cares(store, file_path, sid, graph=g)
-    impacts = gv_graph.filter_debounced(store, rel, impacts)
+    impacts = gv_graph.filter_debounced(store, rel, impacts, record=False)
     if not impacts:
         return
+    # Deliver first, stamp the debounce after — a delivery failure must not
+    # buy the (file, peer) pair a silent debounce window.
     note = notify.format_note(rel, impacts)
-    notify.record_note(store, sid, rel, note)
     print(notify.hook_output(note))
+    sys.stdout.flush()
+    notify.record_note(store, sid, rel, note)
+    gv_graph.record_notified(store, rel, impacts)
 
 
 def do_session_end(payload: dict) -> None:

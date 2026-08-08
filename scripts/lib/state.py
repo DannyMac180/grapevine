@@ -21,11 +21,17 @@ from pathlib import Path
 GV_ROOT = Path(os.environ.get("GV_ROOT", str(Path.home() / ".grapevine")))
 LOG_FILE = GV_ROOT / "log"
 STALE_AFTER = timedelta(hours=24)
+# A record whose pid looks dead still counts as live this long after last_seen:
+# hook process trees vary (sh -c layers may or may not exec), so the captured
+# pid can be a transient shell. Heartbeats from active sessions keep them
+# visible; truly dead sessions age out of the grace window.
+PID_GRACE = timedelta(minutes=30)
+LOCK_WAIT_S = 1.0
 
 
 def max_files() -> int:
     try:
-        return int(os.environ.get("GV_MAX_FILES", "200"))
+        return max(1, int(os.environ.get("GV_MAX_FILES", "200")))
     except ValueError:
         return 200
 
@@ -44,10 +50,24 @@ def log(msg: str) -> None:
         pass
 
 
+_git_cache: dict = {}
+
+
 def _git(args: list[str], cwd: str) -> str | None:
+    key = (tuple(args), cwd)
+    if key in _git_cache:
+        return _git_cache[key]
+    result = _git_uncached(args, cwd)
+    # cache stable facts only (branch can change mid-session)
+    if args[0] == "rev-parse":
+        _git_cache[key] = result
+    return result
+
+
+def _git_uncached(args: list[str], cwd: str) -> str | None:
     try:
         out = subprocess.run(
-            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=3
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=1.5
         )
         if out.returncode == 0:
             return out.stdout.strip()
@@ -101,12 +121,30 @@ class Store:
 
     def ensure(self) -> None:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        # Records carry cwd, branch, paths, and prompt-derived task hints:
+        # keep the tree readable by this OS user only, regardless of umask.
+        for d in (GV_ROOT, self.root, self.sessions_dir):
+            try:
+                os.chmod(d, 0o700)
+            except OSError:
+                pass
 
     @contextlib.contextmanager
     def lock(self):
+        """Advisory lock on a dedicated lockfile (never replaced, so the inode
+        is stable). Bounded wait so a stuck holder can't eat the hook budget —
+        on timeout we raise, and the fail-open entry point logs and exits 0."""
         self.ensure()
         with open(self.lock_path, "w") as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX)
+            deadline = time.monotonic() + LOCK_WAIT_S
+            while True:
+                try:
+                    fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("grapevine state lock busy")
+                    time.sleep(0.02)
             try:
                 yield
             finally:
@@ -117,9 +155,15 @@ class Store:
     def _write_json(self, path: Path, data: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(f".tmp.{os.getpid()}.{time.monotonic_ns()}")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=1)
-        os.replace(tmp, path)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
 
     def read_json(self, path: Path) -> dict | None:
         try:
@@ -154,8 +198,10 @@ class Store:
     def update_session(self, session_id: str, mutate) -> dict:
         """Read-modify-write one record under the lock. mutate(rec) -> rec."""
         with self.lock():
-            rec = self.read_session(session_id) or {}
-            rec = mutate(rec)
+            rec = self.read_session(session_id)
+            if rec is None and self.session_path(session_id).exists():
+                log(f"warning: unreadable record for {session_id}, rebuilding")
+            rec = mutate(rec or {})
             self._write_json(self.session_path(session_id), rec)
             return rec
 
@@ -163,11 +209,13 @@ class Store:
 
     def register(self, session_id: str, *, name: str = "", socket: str = "",
                  branch: str = "", task_hint: str = "") -> dict:
+        pid = host_pid()
+
         def mutate(rec: dict) -> dict:
             rec.update({
                 "session_id": session_id,
                 "name": name or rec.get("name", ""),
-                "pid": os.getppid(),
+                "pid": pid,
                 "socket": socket or rec.get("socket", ""),
                 "cwd": self.cwd,
                 "branch": branch,
@@ -212,6 +260,37 @@ class Store:
                                                      "last_seen": now_iso()})
 
 
+def host_pid() -> int:
+    """Best-effort pid of the Claude Code process hosting this hook.
+
+    The hook's process tree is `claude → sh -c → wrapper → python` with a
+    variable number of layers (shells may or may not exec through), so a bare
+    getppid() can capture a transient shell. Walk the ancestor chain looking
+    for the claude process; fall back to the immediate parent.
+    """
+    pid = os.getppid()
+    try:
+        cur = pid
+        for _ in range(8):
+            out = subprocess.run(
+                ["ps", "-o", "ppid=,comm=", "-p", str(cur)],
+                capture_output=True, text=True, timeout=2)
+            if out.returncode != 0:
+                break
+            fields = out.stdout.split(None, 1)
+            if len(fields) < 2:
+                break
+            parent, comm = int(fields[0]), fields[1].strip().lower()
+            if "claude" in comm:
+                return cur
+            if parent <= 1:
+                break
+            cur = parent
+    except Exception:
+        pass
+    return pid
+
+
 def pid_alive(pid: int) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
@@ -229,14 +308,20 @@ def pid_alive(pid: int) -> bool:
 def is_live(rec: dict, now: datetime | None = None) -> bool:
     if rec.get("ended", False):
         return False
-    if not pid_alive(rec.get("pid", 0)):
-        return False
     try:
         seen = datetime.strptime(rec["last_seen"], "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=timezone.utc)
     except (KeyError, ValueError):
         return False
-    return (now or datetime.now(timezone.utc)) - seen < STALE_AFTER
+    age = (now or datetime.now(timezone.utc)) - seen
+    if age >= STALE_AFTER:
+        return False
+    if pid_alive(rec.get("pid", 0)):
+        return True
+    # Dead-looking pid: keep the record live within the heartbeat grace
+    # window (see PID_GRACE) so a mis-captured transient pid can't silently
+    # hide an active session.
+    return age < PID_GRACE
 
 
 def live_sessions(store: Store) -> list[dict]:

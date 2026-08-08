@@ -133,6 +133,50 @@ class ImpactTestCase(unittest.TestCase):
         again = gv_graph.filter_debounced(self.store, "src/shared.ts", impacts)
         self.assertEqual(len(again), 1)
 
+    def test_multi_peer_note_stays_three_sentences(self):
+        peers = [({"session_id": f"p{i}", "name": f"peer-{i}", "branch": "b"},
+                  "touched this file") for i in range(4)]
+        note = notify.format_note("src/shared.ts", peers)
+        # sentence count: periods ending sentences (paths contain dots, so
+        # count ". "+final "." boundaries via the template structure instead)
+        self.assertLessEqual(note.count(". "), 3)
+        for i in range(4):
+            self.assertIn(f"peer-{i}", note)
+
+    def test_wrapper_fail_open_without_python3(self):
+        wrapper = LIB.parent / "gv-post-tool.sh"
+        bindir = Path(self.tmp.name) / "binonly"
+        bindir.mkdir()
+        for tool in ("sh", "dirname", "pwd", "mkdir"):
+            src = Path("/bin") / tool
+            if not src.exists():
+                src = Path("/usr/bin") / tool
+            if src.exists():
+                (bindir / tool).symlink_to(src)
+        r = subprocess.run(
+            ["/bin/sh", str(wrapper)], input="{}", text=True,
+            capture_output=True,
+            env={"PATH": str(bindir), "HOME": self.tmp.name})
+        self.assertEqual(r.returncode, 0)
+
+    def test_delivery_failure_does_not_debounce(self):
+        self._session("editor", ["src/shared.ts"])
+        self._session("peer", ["src/shared.ts"])
+        g = gv_graph.build_graph(self.store)
+        impacts = gv_graph.who_cares(self.store, str(self.repo / "src/shared.ts"),
+                                     "editor", graph=g)
+        # check without recording (the delivery-failure path never stamps)
+        peek = gv_graph.filter_debounced(self.store, "src/shared.ts", impacts,
+                                         record=False)
+        self.assertEqual(len(peek), 1)
+        again = gv_graph.filter_debounced(self.store, "src/shared.ts", impacts,
+                                          record=False)
+        self.assertEqual(len(again), 1)  # still not debounced
+        gv_graph.record_notified(self.store, "src/shared.ts", impacts)
+        after = gv_graph.filter_debounced(self.store, "src/shared.ts", impacts,
+                                          record=False)
+        self.assertEqual(after, [])
+
     def test_note_template_and_hook_output(self):
         peer = {"session_id": "peer-123", "name": "payments-3f",
                 "branch": "feature/payments"}

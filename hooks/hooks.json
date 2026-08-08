@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/gv-session-start.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/gv-session-start.sh\"",
             "timeout": 10
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/gv-user-prompt.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/gv-user-prompt.sh\"",
             "timeout": 5
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/gv-post-tool.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/gv-post-tool.sh\"",
             "timeout": 5
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/gv-session-end.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/gv-session-end.sh\"",
             "timeout": 10
           }
         ]

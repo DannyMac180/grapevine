@@ -30,17 +30,26 @@ NOTE_TEMPLATE = (
 )
 
 
+def _label(peer: dict) -> str:
+    return peer.get("name") or peer.get("session_id", "?")[:8]
+
+
 def format_note(file_rel: str, impacts: list[tuple[dict, str]]) -> str:
-    """One plain-text note covering every affected peer (≤3 sentences each)."""
-    lines = []
-    for peer, reason in impacts:
-        lines.append(NOTE_TEMPLATE.format(
-            file=file_rel,
-            name=peer.get("name") or peer.get("session_id", "?")[:8],
-            branch=peer.get("branch") or "no branch",
-            reason=reason,
-        ))
-    return "\n".join(lines)
+    """One plain-text note, ≤3 sentences total regardless of peer count."""
+    peer, reason = impacts[0]
+    note = NOTE_TEMPLATE.format(
+        file=file_rel,
+        name=_label(peer),
+        branch=peer.get("branch") or "no branch",
+        reason=reason,
+    )
+    rest = impacts[1:]
+    if rest:
+        others = "; ".join(
+            f'"{_label(p)}" ({p.get("branch") or "no branch"}, {r})'
+            for p, r in rest[:5])
+        note += f" Also possibly affected: {others}."
+    return note
 
 
 def hook_output(note: str) -> str:
@@ -70,18 +79,24 @@ def record_note(store: "state.Store", session_id: str, file_rel: str,
         pass
 
 
-def last_notes(store: "state.Store", n: int = 5) -> list[dict]:
+def last_notes(store: "state.Store", n: int = 5,
+               session_id: str | None = None) -> list[dict]:
     try:
         lines = (store.root / NOTES_FILE).read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
     out = []
-    for line in lines[-n:]:
+    for line in reversed(lines):
         try:
-            out.append(json.loads(line))
+            rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-    return out
+        if session_id and rec.get("session_id") != session_id:
+            continue
+        out.append(rec)
+        if len(out) == n:
+            break
+    return list(reversed(out))
 
 
 def send_socket(note: str) -> None:  # pragma: no cover

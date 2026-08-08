@@ -58,6 +58,32 @@ class GraphTestCase(unittest.TestCase):
         found = gv_graph.parse_imports(self.repo / "src" / "consumer.ts", self.repo)
         self.assertEqual(found, ["src/shared.ts"])
 
+    def test_parse_ts_dynamic_import(self):
+        p = self.repo / "src" / "lazy.ts"
+        p.write_text("const m = await import('./shared');\n")
+        found = gv_graph.parse_imports(p, self.repo)
+        self.assertEqual(found, ["src/shared.ts"])
+
+    def test_parse_py_from_import_submodule(self):
+        (self.repo / "pkg").mkdir()
+        (self.repo / "pkg" / "__init__.py").write_text("")
+        (self.repo / "pkg" / "mod.py").write_text("X = 1\n")
+        p = self.repo / "uses.py"
+        p.write_text("from pkg import mod\n")
+        found = gv_graph.parse_imports(p, self.repo)
+        self.assertIn("pkg/mod.py", found)
+
+    def test_pathological_input_parses_fast(self):
+        # regression: the old combined regex backtracked super-linearly on
+        # `import` + long whitespace runs (416ms at 1000 chars, 3.1s at 2000)
+        p = self.repo / "src" / "evil.ts"
+        p.write_text("import " + " " * 100000 + "\nexport " + " " * 100000 + "\n"
+                     + "import { x } from './shared';\n")
+        t0 = time.monotonic()
+        found = gv_graph.parse_imports(p, self.repo)
+        self.assertLess(time.monotonic() - t0, 0.2)
+        self.assertEqual(found, ["src/shared.ts"])
+
     def test_parse_py_import(self):
         found = gv_graph.parse_imports(self.repo / "src" / "app.py", self.repo)
         self.assertEqual(found, ["src/util.py"])
@@ -87,7 +113,15 @@ class GraphTestCase(unittest.TestCase):
         self._two_live_sessions()
         g1 = gv_graph.build_graph(self.store)
         cached = g1["imports_cache"]["src/consumer.ts"]
-        g2 = gv_graph.build_graph(self.store)
+        # spy on parse_imports: an unchanged mtime must NOT re-parse
+        calls = []
+        real = gv_graph.parse_imports
+        gv_graph.parse_imports = lambda p, r: (calls.append(str(p)), real(p, r))[1]
+        try:
+            g2 = gv_graph.build_graph(self.store)
+        finally:
+            gv_graph.parse_imports = real
+        self.assertEqual(calls, [])
         self.assertEqual(g2["imports_cache"]["src/consumer.ts"], cached)
         # mtime change invalidates
         p = self.repo / "src" / "consumer.ts"

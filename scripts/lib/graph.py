@@ -18,12 +18,22 @@ import state  # noqa: E402
 
 GRAPH_FILE = "graph.json"
 NOTIFIED_FILE = "notified.json"
-NEIGHBORHOOD_CAP = 400
+def neighborhood_cap() -> int:
+    try:
+        return max(1, int(os.environ.get("GV_NEIGHBORHOOD_CAP", "400")))
+    except ValueError:
+        return 400
 
-_TS_JS_RE = re.compile(
-    r"""(?:import\s+(?:[\w*\s{},$]+\s+from\s+)?|export\s+[\w*\s{},$]*\s*from\s+|require\s*\(\s*)["']([^"']+)["']""",
-)
-_PY_FROM_RE = re.compile(r"^\s*from\s+([\w.]+)\s+import\s+", re.MULTILINE)
+# Quote-anchored patterns: each match starts a bounded distance from the string
+# literal, so matching is linear — no nested/ambiguous quantifiers (a previous
+# form had catastrophic backtracking on long whitespace runs after `import`).
+_TS_JS_RES = [
+    re.compile(r"""\bfrom\s{0,8}["']([^"'\n]+)["']"""),        # import/export … from '…'
+    re.compile(r"""\bimport\s{0,8}\(?\s{0,8}["']([^"'\n]+)["']"""),  # bare + dynamic import
+    re.compile(r"""\brequire\s{0,8}\(\s{0,8}["']([^"'\n]+)["']"""),
+]
+_PY_FROM_RE = re.compile(r"^\s*from\s+([\w.]+)\s+import\s+([\w.,\s]{0,200})",
+                         re.MULTILINE)
 _PY_IMPORT_RE = re.compile(r"^\s*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)", re.MULTILINE)
 _GO_RE = re.compile(r"""^\s*(?:import\s+)?(?:\w+\s+)?"([^"]+)"\s*$""", re.MULTILINE)
 
@@ -91,12 +101,23 @@ def parse_imports(abs_path: Path, root: Path) -> list[str]:
     ext = abs_path.suffix.lower()
     targets: list[Path] = []
     if ext in _TS_EXTS:
-        for spec in _TS_JS_RE.findall(text):
+        specs = set()
+        for rx in _TS_JS_RES:
+            specs.update(rx.findall(text))
+        for spec in specs:
             t = _resolve_ts_js(spec, abs_path, root)
             if t:
                 targets.append(t)
     elif ext == ".py":
-        mods = _PY_FROM_RE.findall(text)
+        mods = []
+        for mod, names in _PY_FROM_RE.findall(text):
+            mods.append(mod)
+            # `from pkg import module` — the imported names may be submodules
+            for n in names.split(","):
+                n = n.strip().split()[0] if n.strip() else ""
+                if n.isidentifier():
+                    sep = "" if mod.endswith(".") else "."
+                    mods.append(f"{mod}{sep}{n}")
         for group in _PY_IMPORT_RE.findall(text):
             mods += [m.strip() for m in group.split(",")]
         for mod in mods:
@@ -141,42 +162,56 @@ def build_graph(store: "state.Store", deadline: float | None = None) -> dict:
     (touched edges are always complete, import edges catch up next call).
     """
     graph_path = store.root / GRAPH_FILE
-    prev = store.read_json(graph_path) or {}
-    cache = prev.get("imports_cache", {})
-    live = state.live_sessions(store)
-    root = Path(state.repo_root(store.cwd) or store.cwd)
-
-    sessions = {
-        r["session_id"]: {
-            "name": r.get("name", ""),
-            "branch": r.get("branch", ""),
-            "cwd": r.get("cwd", ""),
-            "task_hint": r.get("task_hint", ""),
-            "files": sorted(r.get("files_touched", {})),
-        }
-        for r in live
-    }
-
-    # Neighborhood: parse imports only when ≥2 live sessions exist, and only
-    # for the union of their touched files.
-    imports: dict[str, list[str]] = {}
-    if len(live) >= 2:
-        neighborhood = sorted({f for s in sessions.values() for f in s["files"]})
-        for rel in neighborhood[:NEIGHBORHOOD_CAP]:
-            if deadline is not None and time.monotonic() > deadline:
-                break
-            found = _imports_for(store, cache, rel, root)
-            if found:
-                imports[rel] = found
-
-    graph = {
-        "built_at": state.now_iso(),
-        "project": store.project,
-        "sessions": sessions,
-        "imports": imports,
-        "imports_cache": cache,
-    }
+    # The whole read-build-write cycle holds the lock: concurrent hooks would
+    # otherwise rebuild from divergent snapshots and the stale writer would
+    # atomically clobber the newer graph (lost update).
     with store.lock():
+        prev = store.read_json(graph_path) or {}
+        cache = prev.get("imports_cache", {})
+        live = state.live_sessions(store)
+        root = Path(state.repo_root(store.cwd) or store.cwd)
+
+        sessions = {
+            r["session_id"]: {
+                "name": r.get("name", ""),
+                "branch": r.get("branch", ""),
+                "cwd": r.get("cwd", ""),
+                "task_hint": r.get("task_hint", ""),
+                "files": sorted(r.get("files_touched", {})),
+            }
+            for r in live
+        }
+
+        # Neighborhood: parse imports only when ≥2 live sessions exist, and
+        # only for the union of their touched files.
+        imports: dict[str, list[str]] = {}
+        if len(live) >= 2:
+            neighborhood = sorted({f for s in sessions.values()
+                                   for f in s["files"]})
+            cap = neighborhood_cap()
+            if len(neighborhood) > cap:
+                state.log(f"graph: neighborhood truncated {len(neighborhood)}"
+                          f" -> {cap} (GV_NEIGHBORHOOD_CAP)")
+            for rel in neighborhood[:cap]:
+                if deadline is not None and time.monotonic() > deadline:
+                    break
+                found = _imports_for(store, cache, rel, root)
+                if found:
+                    imports[rel] = found
+
+        # shares-worktree-base: session ↔ session, by construction always true
+        # within one project-id (spec §4.3 edge 3; used for message phrasing).
+        sids = sorted(sessions)
+        shares = [[a, b] for i, a in enumerate(sids) for b in sids[i + 1:]]
+
+        graph = {
+            "built_at": state.now_iso(),
+            "project": store.project,
+            "sessions": sessions,
+            "imports": imports,
+            "shares_worktree_base": shares,
+            "imports_cache": cache,
+        }
         store._write_json(graph_path, graph)
     return graph
 
@@ -227,8 +262,15 @@ def who_cares(store: "state.Store", file_path: str, editing_session: str,
 # ---- notification debounce ----------------------------------------------
 
 def filter_debounced(store: "state.Store", file_rel: str,
-                     impacts: list[tuple[dict, str]]) -> list[tuple[dict, str]]:
-    """Drop (file, peer) pairs notified within the debounce window; record the rest."""
+                     impacts: list[tuple[dict, str]],
+                     record: bool = True) -> list[tuple[dict, str]]:
+    """Drop (file, peer) pairs notified within the debounce window.
+
+    With record=True the surviving pairs are stamped immediately; pass
+    record=False to check without stamping and call record_notified() after
+    the note is actually delivered (so a delivery failure doesn't buy the
+    pair a silent debounce window).
+    """
     path = store.root / NOTIFIED_FILE
     now = time.time()
     window = debounce_seconds()
@@ -241,7 +283,20 @@ def filter_debounced(store: "state.Store", file_rel: str,
             key = f"{file_rel}|{peer['session_id']}"
             if key in notified:
                 continue
-            notified[key] = now
+            if record:
+                notified[key] = now
             out.append((peer, reason))
         store._write_json(path, notified)
     return out
+
+
+def record_notified(store: "state.Store", file_rel: str,
+                    impacts: list[tuple[dict, str]]) -> None:
+    """Stamp (file, peer) pairs as notified — call after successful delivery."""
+    path = store.root / NOTIFIED_FILE
+    now = time.time()
+    with store.lock():
+        notified = store.read_json(path) or {}
+        for peer, _ in impacts:
+            notified[f"{file_rel}|{peer['session_id']}"] = now
+        store._write_json(path, notified)

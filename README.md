@@ -77,7 +77,8 @@ Sessions are matched per project: all worktrees of one repo hash to the same `pr
 |---|---|---|
 | `GV_DISABLE=1` | unset | Every hook becomes a no-op (no state writes, instant exit) |
 | `GV_DEBOUNCE_MINUTES` | `10` | Suppression window for repeat notes about the same (file, peer) pair |
-| `GV_MAX_FILES` | `200` | Most-recent files kept per session record |
+| `GV_MAX_FILES` | `200` | Most-recent files kept per session record (min 1) |
+| `GV_NEIGHBORHOOD_CAP` | `400` | Max files import-parsed per graph rebuild (truncation is logged) |
 
 Set them in your shell or a settings `env` map before starting the session.
 
@@ -87,7 +88,9 @@ Set them in your shell or a settings `env` map before starting the session.
 - **Plain text only**, matching the messaging channel itself.
 - **One-hop imports.** The graph resolves direct import edges only (no transitive closure), regex-based, for **TypeScript/JavaScript, Python, and Go**. Other languages still get direct shared-file detection.
 - **Sessions must run the plugin** to be visible; records go stale after 24h without activity and are pruned.
-- Go import resolution is a best-effort tail-match of the import path against repo directories.
+- **Import edges are resolved against the editing session's checkout.** Peer files are parsed at their repo-relative path under the editor's worktree, so heavily divergent branches can yield stale or missing edges. Advisory-only by design.
+- **Import resolution is approximate.** Regex parsing plus best-effort path resolution (Go imports are module paths tail-matched against repo directories; Python package resolution is anchored at the repo root) — expect false negatives on unusual layouts. Missed edges mean a missed nudge, never a wrong action.
+- **Crashed sessions can linger briefly.** `SessionEnd` doesn't fire on a crash or terminal kill, and hook process trees make pid capture best-effort, so liveness uses pid + a 30-minute heartbeat grace window. A crashed session may appear as a peer for up to ~30 minutes. (The per-turn `Stop` event is deliberately *not* used to mark sessions ended — it fires at every turn end and would flag live sessions dead between turns.)
 
 ## Uninstall
 
@@ -97,7 +100,7 @@ Set them in your shell or a settings `env` map before starting the session.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests   # 30 tests, stdlib only
+python3 -m unittest discover -s tests   # 42 tests, stdlib only
 ```
 
 MIT licensed. See [docs/spec.md](docs/spec.md) for the original build spec.
