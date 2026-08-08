@@ -39,12 +39,29 @@ flowchart TB
 
 Requirements: **Claude Code ≥ v2.1.224**, **macOS or Linux**, `python3` (3.10+) and `git` on PATH. No pip dependencies.
 
+### From the plugin marketplace (recommended)
+
+This repo doubles as its own [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Inside any Claude Code session:
+
+```
+/plugin marketplace add DannyMac180/grapevine
+/plugin install grapevine@grapevine
+```
+
+That installs Grapevine for every future session — no clone, no flags. Update later with `/plugin marketplace update grapevine`, or remove with `/plugin uninstall grapevine`.
+
+### From a local clone
+
 ```bash
-git clone https://github.com/danmcateer/grapevine.git
+git clone https://github.com/DannyMac180/grapevine.git
 claude --plugin-dir ./grapevine
 ```
 
-That's it for a single session. To load it in every session without the flag, keep it in your skills directory (`~/.claude/skills/grapevine/`), or install it through a [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces) if you host one. Verify with `/plugin` (Grapevine listed, no errors) or by editing any file and running `/gv-status` — your session's record should appear.
+The `--plugin-dir` flag loads it for that single session only. To load it in every session without the flag, install through the marketplace above, or keep it in your skills directory (`~/.claude/skills/grapevine/`).
+
+### Verify
+
+Either way, verify with `/plugin` (Grapevine listed, no errors) or by editing any file and running `/gv-status` — your session's record should appear.
 
 Grapevine must be installed in **every session you want observed** — an unobserved session is invisible to the graph.
 

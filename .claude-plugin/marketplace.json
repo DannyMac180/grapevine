@@ -1,0 +1,27 @@
+{
+  "name": "grapevine",
+  "owner": {
+    "name": "Dan McAteer",
+    "url": "https://github.com/DannyMac180"
+  },
+  "metadata": {
+    "description": "Marketplace for Grapevine 🍇 — coordination awareness for independent Claude Code sessions",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "grapevine",
+      "source": "./",
+      "description": "Grapevine 🍇 — shared awareness for independent Claude Code sessions: observes what each session touches, maps the dependencies between them, and nudges a session when its edit affects a peer.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Dan McAteer"
+      },
+      "license": "MIT",
+      "homepage": "https://github.com/DannyMac180/grapevine",
+      "repository": "https://github.com/DannyMac180/grapevine",
+      "keywords": ["coordination", "sessions", "hooks", "awareness", "multi-session"],
+      "category": "workflow"
+    }
+  ]
+}
