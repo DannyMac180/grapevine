@@ -41,10 +41,12 @@ Requirements: **Claude Code ≥ v2.1.224**, **macOS or Linux**, `python3` (3.10+
 
 ### From the plugin marketplace (recommended)
 
-This repo doubles as its own [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Inside any Claude Code session:
+This repo doubles as its own [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Inside any Claude Code session (run these as two separate commands):
 
 ```
 /plugin marketplace add DannyMac180/grapevine
+```
+```
 /plugin install grapevine@grapevine
 ```
 
