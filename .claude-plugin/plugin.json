@@ -1,0 +1,9 @@
+{
+  "name": "grapevine",
+  "description": "Grapevine 🍇 — shared awareness for independent Claude Code sessions: observes what each session touches, maps the dependencies between them, and nudges a session when its edit affects a peer.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Dan McAteer"
+  },
+  "license": "MIT"
+}
